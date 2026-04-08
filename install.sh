@@ -24,10 +24,9 @@ echo "✓ edge-tts found at $EDGE_TTS_BIN"
 mkdir -p "$PLUGINS_DIR"
 mkdir -p "$TOOLS_DIR"
 
-# Write plugin — sed in the real edge-tts path
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-sed "s|/Users/michaeloneal/.local/bin/edge-tts|$EDGE_TTS_BIN|g" \
-  "$SCRIPT_DIR/src/plugin.ts" > "$PLUGINS_DIR/voice.ts"
+cp "$SCRIPT_DIR/src/plugin.ts" "$PLUGINS_DIR/voice.ts"
+cp "$SCRIPT_DIR/src/utils.ts" "$PLUGINS_DIR/utils.ts"
 
 echo "✓ Plugin installed → $PLUGINS_DIR/voice.ts"
 

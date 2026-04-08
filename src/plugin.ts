@@ -6,7 +6,24 @@ const VOLUME = 2.5
 const FLAG = "/tmp/.opencode-voice-enabled"
 const SAVE_DIR_FILE = "/tmp/.opencode-voice-dir"
 const VOICE_FILE = "/tmp/.opencode-voice-name"
-const EDGE_TTS = "/Users/michaeloneal/.local/bin/edge-tts"
+const HOME = process.env.HOME ?? ""
+const EDGE_TTS_FALLBACKS = [
+  `${HOME}/.local/bin/edge-tts`,
+  "/usr/local/bin/edge-tts",
+  "/opt/homebrew/bin/edge-tts",
+]
+
+async function resolveEdgeTts($: any): Promise<string> {
+  // Try PATH first
+  const r = await $`which edge-tts`.quiet().nothrow()
+  if (r.exitCode === 0) return r.text().trim()
+  // Try known install locations
+  for (const p of EDGE_TTS_FALLBACKS) {
+    const check = await $`test -x ${p}`.nothrow()
+    if (check.exitCode === 0) return p
+  }
+  throw new Error("edge-tts not found. Install with: pipx install edge-tts")
+}
 
 // ── State helpers ─────────────────────────────────────────────────────────────
 
@@ -35,7 +52,7 @@ async function getSaveDir(): Promise<string | null> {
 
 // ── TTS ───────────────────────────────────────────────────────────────────────
 
-async function speak(text: string, $: any, voiceOverride?: string) {
+async function speak(text: string, $: any, edgeTts: string, voiceOverride?: string) {
   const cleaned = stripMarkdown(text)
   if (!cleaned) return
 
@@ -56,7 +73,7 @@ async function speak(text: string, $: any, voiceOverride?: string) {
   }
 
   try {
-    await $`${EDGE_TTS} --voice ${voice} --text ${cleaned} --write-media ${outPath}`.quiet()
+    await $`${edgeTts} --voice ${voice} --text ${cleaned} --write-media ${outPath}`.quiet()
     await $`afplay -v ${VOLUME} ${outPath}`.quiet()
   } finally {
     if (!keepFile) {
@@ -65,14 +82,16 @@ async function speak(text: string, $: any, voiceOverride?: string) {
   }
 }
 
-async function listVoices($: any): Promise<ReturnType<typeof parseVoices>> {
-  const raw = await $`${EDGE_TTS} --list-voices`.quiet().text()
+async function listVoices($: any, edgeTts: string): Promise<ReturnType<typeof parseVoices>> {
+  const raw = await $`${edgeTts} --list-voices`.quiet().text()
   return parseVoices(raw)
 }
 
 // ── Plugin ────────────────────────────────────────────────────────────────────
 
 export const server: Plugin = async ({ client, $ }) => {
+  const EDGE_TTS = await resolveEdgeTts($)
+
   return {
     tool: {
       enable_voice: tool({
@@ -93,7 +112,7 @@ export const server: Plugin = async ({ client, $ }) => {
           } else {
             await $`rm -f ${SAVE_DIR_FILE}`.nothrow()
           }
-          await speak("Voice enabled.", $)
+          await speak("Voice enabled.", $, EDGE_TTS)
           return save_dir ? `Voice enabled. Clips will be saved to ${save_dir}.` : "Voice enabled."
         },
       }),
@@ -118,7 +137,7 @@ export const server: Plugin = async ({ client, $ }) => {
             .describe("Keyword to filter voices by name or gender (e.g. 'en-', 'Female', 'Irish')"),
         },
         async execute({ filter }) {
-          const voices = await listVoices($)
+          const voices = await listVoices($, EDGE_TTS)
           const matched = filter ? filterVoices(voices, filter) : voices
           const current = await getVoice()
           const list = formatVoiceList(matched)
@@ -150,14 +169,14 @@ export const server: Plugin = async ({ client, $ }) => {
 
           if (voice.startsWith("#")) {
             const idx = parseInt(voice.slice(1), 10)
-            const voices = await listVoices($)
+            const voices = await listVoices($, EDGE_TTS)
             const match = voices.find((v) => v.index === idx)
             if (!match) return `No voice at index ${idx}. Run voice_list to see available voices.`
             resolvedVoice = match.name
           }
 
           const sample = text ?? `Hi, I'm ${resolvedVoice.split("-").pop()?.replace("Neural", "") ?? "your assistant"}, speaking with the ${resolvedVoice} voice.`
-          await speak(sample, $, resolvedVoice)
+          await speak(sample, $, EDGE_TTS, resolvedVoice)
           return `Previewed: ${resolvedVoice}`
         },
       }),
@@ -174,14 +193,14 @@ export const server: Plugin = async ({ client, $ }) => {
 
           if (voice.startsWith("#")) {
             const idx = parseInt(voice.slice(1), 10)
-            const voices = await listVoices($)
+            const voices = await listVoices($, EDGE_TTS)
             const match = voices.find((v) => v.index === idx)
             if (!match) return `No voice at index ${idx}. Run voice_list to see available voices.`
             resolvedVoice = match.name
           }
 
           await Bun.write(VOICE_FILE, resolvedVoice)
-          await speak("Voice selected.", $, resolvedVoice)
+          await speak("Voice selected.", $, EDGE_TTS, resolvedVoice)
           return `Voice set to ${resolvedVoice}.`
         },
       }),
@@ -209,7 +228,7 @@ export const server: Plugin = async ({ client, $ }) => {
         }
 
         const text = parts.join("\n\n")
-        if (text) await speak(text, $)
+        if (text) await speak(text, $, EDGE_TTS)
         return
       }
     },
