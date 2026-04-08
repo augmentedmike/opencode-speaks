@@ -1,0 +1,14 @@
+{
+  "name": "opencode-speaks",
+  "version": "0.1.0",
+  "description": "OpenCode plugin — automatic TTS via Edge TTS (Emily, Irish) with optional clip archiving",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "install-plugin": "bash install.sh"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "*",
+    "typescript": "^5"
+  }
+}
