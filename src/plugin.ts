@@ -1,20 +1,23 @@
 import { tool, type Plugin } from "@opencode-ai/plugin"
-import { stripMarkdown, clipFilename } from "./utils.js"
+import { stripMarkdown, clipFilename, parseVoices, filterVoices, formatVoiceList } from "./utils.js"
 
-const VOICE = "en-IE-EmilyNeural"
+const DEFAULT_VOICE = "en-IE-EmilyNeural"
 const VOLUME = 2.5
 const FLAG = "/tmp/.opencode-voice-enabled"
 const SAVE_DIR_FILE = "/tmp/.opencode-voice-dir"
+const VOICE_FILE = "/tmp/.opencode-voice-name"
 const EDGE_TTS = "/Users/michaeloneal/.local/bin/edge-tts"
+
+// ── State helpers ─────────────────────────────────────────────────────────────
 
 async function isEnabled($: any): Promise<boolean> {
   const r = await $`test -f ${FLAG}`.nothrow()
   return r.exitCode === 0
 }
 
-async function getSaveDir(): Promise<string | null> {
+async function readFile(path: string): Promise<string | null> {
   try {
-    const f = Bun.file(SAVE_DIR_FILE)
+    const f = Bun.file(path)
     if (!(await f.exists())) return null
     return (await f.text()).trim() || null
   } catch {
@@ -22,10 +25,21 @@ async function getSaveDir(): Promise<string | null> {
   }
 }
 
-async function speak(text: string, $: any) {
+async function getVoice(): Promise<string> {
+  return (await readFile(VOICE_FILE)) ?? DEFAULT_VOICE
+}
+
+async function getSaveDir(): Promise<string | null> {
+  return readFile(SAVE_DIR_FILE)
+}
+
+// ── TTS ───────────────────────────────────────────────────────────────────────
+
+async function speak(text: string, $: any, voiceOverride?: string) {
   const cleaned = stripMarkdown(text)
   if (!cleaned) return
 
+  const voice = voiceOverride ?? (await getVoice())
   const saveDir = await getSaveDir()
   const filename = clipFilename(cleaned)
 
@@ -42,7 +56,7 @@ async function speak(text: string, $: any) {
   }
 
   try {
-    await $`${EDGE_TTS} --voice ${VOICE} --text ${cleaned} --write-media ${outPath}`.quiet()
+    await $`${EDGE_TTS} --voice ${voice} --text ${cleaned} --write-media ${outPath}`.quiet()
     await $`afplay -v ${VOLUME} ${outPath}`.quiet()
   } finally {
     if (!keepFile) {
@@ -50,6 +64,13 @@ async function speak(text: string, $: any) {
     }
   }
 }
+
+async function listVoices($: any): Promise<ReturnType<typeof parseVoices>> {
+  const raw = await $`${EDGE_TTS} --list-voices`.quiet().text()
+  return parseVoices(raw)
+}
+
+// ── Plugin ────────────────────────────────────────────────────────────────────
 
 export const server: Plugin = async ({ client, $ }) => {
   return {
@@ -83,6 +104,85 @@ export const server: Plugin = async ({ client, $ }) => {
         async execute() {
           await $`rm -f ${FLAG} ${SAVE_DIR_FILE}`.nothrow()
           return "Voice disabled."
+        },
+      }),
+
+      voice_list: tool({
+        description:
+          "List available Edge TTS voices. Use a filter keyword to narrow results (e.g. 'en-', 'Irish', 'Female', 'en-GB'). " +
+          "Returns numbered list — use voice_select to pick one.",
+        args: {
+          filter: tool.schema
+            .string()
+            .optional()
+            .describe("Keyword to filter voices by name or gender (e.g. 'en-', 'Female', 'Irish')"),
+        },
+        async execute({ filter }) {
+          const voices = await listVoices($)
+          const matched = filter ? filterVoices(voices, filter) : voices
+          const current = await getVoice()
+          const list = formatVoiceList(matched)
+          const suffix = `\n\nCurrent voice: ${current}`
+          if (!filter && matched.length > 50) {
+            return (
+              `${matched.length} voices available. Showing first 50 — use a filter to narrow results.\n\n` +
+              formatVoiceList(matched.slice(0, 50)) +
+              suffix
+            )
+          }
+          return list + suffix
+        },
+      }),
+
+      voice_preview: tool({
+        description: "Preview an Edge TTS voice by speaking a sample phrase. Use the voice name or #number from voice_list.",
+        args: {
+          voice: tool.schema
+            .string()
+            .describe("Voice name (e.g. en-GB-SoniaNeural) or #number from voice_list"),
+          text: tool.schema
+            .string()
+            .optional()
+            .describe("Sample text to speak (defaults to a standard preview phrase)"),
+        },
+        async execute({ voice, text }) {
+          let resolvedVoice = voice
+
+          if (voice.startsWith("#")) {
+            const idx = parseInt(voice.slice(1), 10)
+            const voices = await listVoices($)
+            const match = voices.find((v) => v.index === idx)
+            if (!match) return `No voice at index ${idx}. Run voice_list to see available voices.`
+            resolvedVoice = match.name
+          }
+
+          const sample = text ?? `Hi, I'm ${resolvedVoice.split("-").pop()?.replace("Neural", "") ?? "your assistant"}, speaking with the ${resolvedVoice} voice.`
+          await speak(sample, $, resolvedVoice)
+          return `Previewed: ${resolvedVoice}`
+        },
+      }),
+
+      voice_select: tool({
+        description: "Set the active TTS voice. Use the voice name or #number from voice_list. Plays a confirmation phrase in the new voice.",
+        args: {
+          voice: tool.schema
+            .string()
+            .describe("Voice name (e.g. en-GB-SoniaNeural) or #number from voice_list"),
+        },
+        async execute({ voice }) {
+          let resolvedVoice = voice
+
+          if (voice.startsWith("#")) {
+            const idx = parseInt(voice.slice(1), 10)
+            const voices = await listVoices($)
+            const match = voices.find((v) => v.index === idx)
+            if (!match) return `No voice at index ${idx}. Run voice_list to see available voices.`
+            resolvedVoice = match.name
+          }
+
+          await Bun.write(VOICE_FILE, resolvedVoice)
+          await speak("Voice selected.", $, resolvedVoice)
+          return `Voice set to ${resolvedVoice}.`
         },
       }),
     },

@@ -37,3 +37,46 @@ export function toKebabSlug(text: string, maxWords = 5): string {
 export function clipFilename(text: string, timestamp = Date.now()): string {
   return `${timestamp}-${toKebabSlug(text)}.mp3`
 }
+
+// ── Voice list ───────────────────────────────────────────────────────────────
+
+export interface Voice {
+  index: number
+  name: string
+  gender: string
+}
+
+/**
+ * Parse the columnar output of `edge-tts --list-voices`.
+ * Skips the header/separator lines.
+ */
+export function parseVoices(raw: string): Voice[] {
+  const voices: Voice[] = []
+  let index = 1
+  for (const line of raw.split("\n")) {
+    // skip header and separator rows
+    if (!line.trim() || line.startsWith("-") || line.startsWith("Name")) continue
+    const cols = line.trim().split(/\s{2,}/)
+    if (cols.length < 2) continue
+    voices.push({ index: index++, name: cols[0].trim(), gender: cols[1].trim() })
+  }
+  return voices
+}
+
+/**
+ * Filter voices by a case-insensitive keyword matched against name or gender.
+ */
+export function filterVoices(voices: Voice[], keyword: string): Voice[] {
+  const kw = keyword.toLowerCase()
+  return voices.filter(
+    (v) => v.name.toLowerCase().includes(kw) || v.gender.toLowerCase().includes(kw)
+  )
+}
+
+/**
+ * Format a voice list for display.
+ */
+export function formatVoiceList(voices: Voice[]): string {
+  if (voices.length === 0) return "No voices matched."
+  return voices.map((v) => `${v.index}. ${v.name} (${v.gender})`).join("\n")
+}
